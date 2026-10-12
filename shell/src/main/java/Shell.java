@@ -7,6 +7,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -21,7 +23,9 @@ import java.util.stream.Stream;
 public class Shell {
     public static final String COMMAND_PROMPT = "> ";
     private static final Path PATH = getPath();
-    private final List<Pipeline> jobs = new ArrayList<>();
+    private static final Pattern REDIRECT_PATTERN = Pattern.compile("^(.*?)\\s*>\\s*(\\S+)$");
+    private final Map<Integer, Pipeline> jobs = new TreeMap<>();
+    private int nextJobId = 1;
     /**
      * Represents the current working directory of the shell
      * (since the actual current working directory of a JVM cannot be changed).
@@ -69,8 +73,20 @@ public class Shell {
      * @throws Exception if a match class cannot be found
      */
     private static String findCommandClass(String command) throws Exception {
-        // TODO: implement Shell.findCommandClass
-        throw new UnsupportedOperationException("TODO: implement Shell.findCommandClass");
+        File[] entries = PATH.toFile().listFiles();
+        if (entries != null) {
+            for (File entry : entries) {
+                String name = entry.getName();
+                if (!name.endsWith(".class")) {
+                    continue;
+                }
+                String className = name.substring(0, name.length() - ".class".length());
+                if (classNameToCommandName(className).equals(command)) {
+                    return className;
+                }
+            }
+        }
+        throw new Exception(command + ": command not found");
     }
 
     /**
@@ -103,8 +119,18 @@ public class Shell {
      * Runs the Read-Eval-Print Loop of the Shell. The command "exit" ends the loop.
      */
     public void runRepl() {
-        // TODO: implement Shell.runRepl
-        throw new UnsupportedOperationException("TODO: implement Shell.runRepl");
+        Scanner scanner = new Scanner(System.in);
+        while (true) {
+            System.out.print(COMMAND_PROMPT);
+            if (!scanner.hasNextLine()) {
+                break;
+            }
+            String line = scanner.nextLine();
+            if (line.trim().equals("exit")) {
+                break;
+            }
+            processInput(line);
+        }
     }
 
     /**
@@ -115,8 +141,20 @@ public class Shell {
      * otherwise the pipeline that was executed (for testing purposes)
      */
     Pipeline processInput(String input) {
-        // TODO: implement Shell.processInput
-        throw new UnsupportedOperationException("TODO: implement Shell.processInput");
+        if (input.isBlank() || tryExecuteBuiltin(input)) {
+            return null;
+        }
+        try {
+            Pipeline pipeline = new Pipeline(input);
+            pipeline.executePipeline();
+            if (pipeline.isBackground()) {
+                addJob(pipeline);
+            }
+            return pipeline;
+        } catch (Exception e) {
+            System.err.println(e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -165,6 +203,7 @@ public class Shell {
                 java.lang.reflect.Method mainMethod = loadedClass.getMethod("main", String[].class);
                 mainMethod.invoke(null, (Object) commandArgs);
             }
+            System.out.flush();
             System.exit(0);
         } catch (Exception e) {
             System.err.println(e.getMessage());
@@ -181,8 +220,41 @@ public class Shell {
      * @return true if the command was a builtin, false otherwise
      */
     private boolean tryExecuteBuiltin(String input) {
-        // TODO: implement Shell.tryExecuteBuiltin
-        throw new UnsupportedOperationException("TODO: implement Shell.tryExecuteBuiltin");
+        String[] words = input.trim().split("\\s+");
+        switch (words[0]) {
+            case "cd" -> changeDirectory(words.length > 1 ? words[1] : System.getProperty("user.home"));
+            case "jobs" -> listJobs();
+            case "kill" -> killJobsFromArguments(words);
+            default -> {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void killJobsFromArguments(String[] words) {
+        List<Integer> ids = new ArrayList<>();
+        for (int i = 1; i < words.length; i++) {
+            int id;
+            try {
+                id = Integer.parseInt(words[i]);
+            } catch (NumberFormatException e) {
+                id = 0;
+            }
+            if (id <= 0) {
+                System.err.println("kill: arguments must be job IDs");
+                return;
+            }
+            ids.add(id);
+        }
+        killJobs(ids);
+    }
+
+    private void addJob(Pipeline pipeline) {
+        if (jobs.isEmpty()) {
+            nextJobId = 1;
+        }
+        jobs.put(nextJobId++, pipeline);
     }
 
     /**
@@ -197,8 +269,23 @@ public class Shell {
      * @throws IllegalArgumentException if a redirect file is given and it is a directory
      */
     ProcessBuilder buildForkedShell(String command) throws IllegalArgumentException {
-        // TODO: implement Shell.buildForkedShell
-        throw new UnsupportedOperationException("TODO: implement Shell.buildForkedShell");
+        Matcher redirect = REDIRECT_PATTERN.matcher(command.trim());
+        String commandToRun = redirect.matches() ? redirect.group(1) : command;
+
+        ProcessBuilder processBuilder = new ProcessBuilder(
+                "java", "-classpath", getCurrentClassPath().toString(), "Shell", commandToRun);
+        processBuilder.directory(cwd.toFile());
+        processBuilder.redirectError(ProcessBuilder.Redirect.INHERIT);
+
+        if (redirect.matches()) {
+            String fileName = redirect.group(2);
+            Path outputFile = cwd.resolve(fileName);
+            if (Files.isDirectory(outputFile)) {
+                throw new IllegalArgumentException(fileName + ": Is a directory");
+            }
+            processBuilder.redirectOutput(outputFile.toFile());
+        }
+        return processBuilder;
     }
 
     /**
@@ -207,8 +294,12 @@ public class Shell {
      * @param pathString the absolute or relative path string to change to
      */
     void changeDirectory(String pathString) {
-        // TODO: implement Shell.changeDirectory
-        throw new UnsupportedOperationException("TODO: implement Shell.changeDirectory");
+        Path newCwd = cwd.resolve(pathString).normalize();
+        if (Files.isDirectory(newCwd)) {
+            setCwd(newCwd);
+        } else {
+            System.err.println("cd: " + pathString + ": No such file or directory");
+        }
     }
 
     /**
@@ -217,8 +308,16 @@ public class Shell {
      * Job numbering does not restart unless the job list becomes empty.
      */
     void listJobs() {
-        // TODO: implement Shell.listJobs
-        throw new UnsupportedOperationException("TODO: implement Shell.listJobs");
+        Iterator<Map.Entry<Integer, Pipeline>> iterator = jobs.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<Integer, Pipeline> job = iterator.next();
+            Pipeline pipeline = job.getValue();
+            String status = pipeline.getStatus();
+            System.out.printf("%-10s%-20s %s%n", "[" + job.getKey() + "]", status, pipeline.getPipelineCommand());
+            if (!status.equals("Running")) {
+                iterator.remove();
+            }
+        }
     }
 
     /**
@@ -227,8 +326,14 @@ public class Shell {
      * @param ids the ids of the jobs to kill
      */
     void killJobs(List<Integer> ids) {
-        // TODO: implement Shell.killJobs
-        throw new UnsupportedOperationException("TODO: implement Shell.killJobs");
+        for (int id : ids) {
+            Pipeline pipeline = jobs.get(id);
+            if (pipeline == null) {
+                System.err.println("kill: " + id + ": no such job");
+            } else {
+                pipeline.killPipeline();
+            }
+        }
     }
 
     /**
@@ -240,7 +345,6 @@ public class Shell {
         private final List<ProcessBuilder> pbs;
         private final boolean isBackground;
         private List<Process> processes = null;
-        private boolean isDone = false;
         private boolean terminated = false;
 
         /**
@@ -252,8 +356,21 @@ public class Shell {
          * @param input the string command for the pipeline
          */
         public Pipeline(String input) throws IllegalArgumentException {
-            // TODO: implement Shell.Pipeline.<init>
-            throw new UnsupportedOperationException("TODO: implement Shell.Pipeline.<init>");
+            String trimmedInput = input.trim();
+            pipelineCommand = input;
+            isBackground = trimmedInput.endsWith("&");
+            String commands = isBackground ? trimmedInput.substring(0, trimmedInput.length() - 1) : trimmedInput;
+
+            List<ProcessBuilder> builders = new ArrayList<>();
+            for (String command : commands.split("\\|")) {
+                builders.add(buildForkedShell(command.trim()));
+            }
+            builders.getFirst().redirectInput(ProcessBuilder.Redirect.INHERIT);
+            ProcessBuilder last = builders.getLast();
+            if (last.redirectOutput() == ProcessBuilder.Redirect.PIPE) {
+                last.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+            }
+            pbs = builders;
         }
 
         /**
@@ -264,8 +381,11 @@ public class Shell {
          * @return the list of processes in the pipeline
          */
         public List<Process> executePipeline() throws Exception {
-            // TODO: implement Shell.Pipeline.executePipeline
-            throw new UnsupportedOperationException("TODO: implement Shell.Pipeline.executePipeline");
+            processes = ProcessBuilder.startPipeline(pbs);
+            if (!isBackground) {
+                waitFor();
+            }
+            return processes;
         }
 
         /**
@@ -273,8 +393,12 @@ public class Shell {
          * Does nothing if {@code executePipeline()} has not been called.
          */
         void waitFor() throws InterruptedException {
-            // TODO: implement Shell.Pipeline.waitFor
-            throw new UnsupportedOperationException("TODO: implement Shell.Pipeline.waitFor");
+            if (processes == null) {
+                return;
+            }
+            for (Process process : processes) {
+                process.waitFor();
+            }
         }
 
         /**
@@ -283,8 +407,13 @@ public class Shell {
          * before returning.
          */
         public void killPipeline() {
-            // TODO: implement Shell.Pipeline.killPipeline
-            throw new UnsupportedOperationException("TODO: implement Shell.Pipeline.killPipeline");
+            terminated = true;
+            processes.forEach(Process::destroy);
+            try {
+                waitFor();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         /**
@@ -293,8 +422,7 @@ public class Shell {
          * @return false if any processes are still alive, otherwise true
          */
         public boolean isDone() {
-            // TODO: implement Shell.Pipeline.isDone
-            throw new UnsupportedOperationException("TODO: implement Shell.Pipeline.isDone");
+            return processes != null && processes.stream().noneMatch(Process::isAlive);
         }
 
         /**
@@ -303,8 +431,7 @@ public class Shell {
          * @return true if pipeline runs in the background, false if runs in the foreground
          */
         public boolean isBackground() {
-            // TODO: implement Shell.Pipeline.isBackground
-            throw new UnsupportedOperationException("TODO: implement Shell.Pipeline.isBackground");
+            return isBackground;
         }
 
         /**
@@ -313,8 +440,7 @@ public class Shell {
          * @return true if {@code killPipeline} was called, otherwise false
          */
         public boolean isTerminated() {
-            // TODO: implement Shell.Pipeline.isTerminated
-            throw new UnsupportedOperationException("TODO: implement Shell.Pipeline.isTerminated");
+            return terminated;
         }
 
         public String getPipelineCommand() {

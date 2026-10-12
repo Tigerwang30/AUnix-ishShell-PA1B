@@ -24,7 +24,51 @@ public class Uniq extends ShellCommand {
 
     @Override
     protected void runCommand() throws IOException {
-        // TODO: implement Uniq.runCommand
-        throw new UnsupportedOperationException("TODO: implement Uniq.runCommand");
+        boolean showCounts = cmdArgs.length > 0 && cmdArgs[0].equals("-c");
+        int firstFileIndex = showCounts ? 1 : 0;
+        int fileCount = cmdArgs.length - firstFileIndex;
+
+        if (fileCount > 1) {
+            System.err.println("Usage: uniq [-c] [<file>]");
+            return;
+        }
+        if (fileCount == 0) {
+            collapseDuplicates(System.in, showCounts);
+            return;
+        }
+
+        Path file = Paths.get(cmdArgs[firstFileIndex]);
+        try (InputStream input = getFileInput(file)) {
+            collapseDuplicates(input, showCounts);
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+        }
+    }
+
+    private void collapseDuplicates(InputStream input, boolean showCounts) throws IOException {
+        String previousLine = null;
+        int runLength = 0;
+        String rawLine;
+        while ((rawLine = readLineRaw(input)) != null) {
+            String line = rawLine.replaceFirst("\\R$", "");
+            if (line.equals(previousLine)) {
+                runLength++;
+            } else {
+                printRun(previousLine, runLength, showCounts);
+                previousLine = line;
+                runLength = 1;
+            }
+        }
+        printRun(previousLine, runLength, showCounts);
+    }
+
+    private void printRun(String line, int runLength, boolean showCounts) {
+        if (line == null) {
+            return;
+        }
+        if (showCounts) {
+            System.out.print(runLength + " ");
+        }
+        System.out.println(line);
     }
 }

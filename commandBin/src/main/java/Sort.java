@@ -1,8 +1,8 @@
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -26,7 +26,34 @@ public class Sort extends ShellCommand {
 
     @Override
     protected void runCommand() throws IOException {
-        // TODO: implement Sort.runCommand
-        throw new UnsupportedOperationException("TODO: implement Sort.runCommand");
+        boolean reverse = cmdArgs.length > 0 && cmdArgs[0].equals("-r");
+        String[] fileNames = Arrays.copyOfRange(cmdArgs, reverse ? 1 : 0, cmdArgs.length);
+
+        List<String> lines = new ArrayList<>();
+        if (fileNames.length == 0) {
+            readAllLines(System.in, lines);
+        }
+        for (String fileName : fileNames) {
+            try (InputStream input = getFileInput(Paths.get(fileName))) {
+                readAllLines(input, lines);
+            } catch (IllegalArgumentException e) {
+                System.err.println(e.getMessage());
+            }
+        }
+
+        Collections.sort(lines);
+        if (reverse) {
+            Collections.reverse(lines);
+        }
+        for (String line : lines) {
+            System.out.print(line);
+        }
+    }
+
+    private void readAllLines(InputStream input, List<String> lines) throws IOException {
+        String line;
+        while ((line = readLineRaw(input)) != null) {
+            lines.add(line);
+        }
     }
 }

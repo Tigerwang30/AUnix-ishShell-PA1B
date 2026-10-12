@@ -1,4 +1,7 @@
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 /**
  * {@code cat}: prints the contents of one or more files to standard out, in order.
@@ -18,7 +21,20 @@ public class Cat extends ShellCommand {
 
     @Override
     protected void runCommand() throws IOException {
-        // TODO: implement Cat.runCommand
-        throw new UnsupportedOperationException("TODO: implement Cat.runCommand");
+        if (cmdArgs.length == 0) {
+            String line;
+            while ((line = readLineRaw(System.in)) != null) {
+                System.out.print(line);
+            }
+        } else {
+            for (String filename : cmdArgs) {
+                Path filePath = Paths.get(filename);
+                try (FileInputStream in = getFileInput(filePath)) {
+                    System.out.write(in.readAllBytes());
+                } catch (IllegalArgumentException e) {
+                    System.err.println(e.getMessage());
+                }
+            }
+        }
     }
 }
